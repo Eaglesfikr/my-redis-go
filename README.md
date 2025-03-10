@@ -27,7 +27,24 @@ That's all!
 Note: This section is for stages 2 and beyond.
 
 1. Ensure you have `go (1.24)` installed locally
-1. Run `./your_program.sh` to run your Redis server, which is implemented in
+2. Run `./your_program.sh` to run your Redis server, which is implemented in
    `app/main.go`.
-1. Commit your changes and run `git push origin master` to submit your solution
+3. Commit your changes and run `git push origin master` to submit your solution
    to CodeCrafters. Test output will be streamed to your terminal.
+
+这是我自己以Go写的redis。这些天在学习redis和go，突发奇想，为什么不用Go做一个基本功能的redis呢，双管齐下，既可以学习Go语言，形成优雅编程习惯，也可以学习redis架构。
+
+# 环境
+
+> go 1.24.1
+
+# 特征
+
+实现部分简单的PING，SET,GET等命令，实现其REST协议解析
+
+
+# 参见
+
+感谢 https://app.codecrafters.io/courses/redis 提供的开始程序端和过程引导
+
+感谢 https://github.com/redis/go-redis 提供的完整的，风格优雅的软件源代码
