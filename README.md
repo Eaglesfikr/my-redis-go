@@ -38,10 +38,31 @@ Note: This section is for stages 2 and beyond.
 
 > go 1.24.1
 
+# 项目结构
+
+```
+main.go 负责网络通信
+command.go 负责解析和执行命令
+store.go 负责数据存储
+```
+
 # 特征
 
-实现部分简单的PING，SET,GET等命令，实现其REST协议解析
+实现部分如PING，SET,GET等命令，方法分发机制，实现其REST协议解析
 
+
+# 测试
+
+成功安装redis-cli在WSL里并编译：
+
+```
+PS D:\workshop\Go\src\my-redis-go> cd test
+PS D:\workshop\Go\src\my-redis-go\test> wsl
+***:/mnt/d/workshop/Go/src/my-redis-go/test$ ls
+redis-7.2.4  redis.tar.gz
+***:/mnt/d/workshop/Go/src/my-redis-go/test$ cd redis-7.2.4/
+***:/mnt/d/workshop/Go/src/my-redis-go/test/redis-7.2.4$ ./src/redis-cli
+```
 
 # 参见
 
