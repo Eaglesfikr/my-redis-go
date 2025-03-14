@@ -18,6 +18,8 @@ var commandHandlers = map[string]commandHandler{
 	"GET":    handleGET,
 	"ECHO":   handleECHO,
 	"CONFIG": handleCONFIG, // CONFIG GET 命令先以CONFIG处理
+	"KEYS":   handleKEYS,   // 添加 KEYS 命令
+	"SAVE":   handleSAVE,   // 添加 SAVE 命令
 }
 
 // 解析 RESP 协议
@@ -114,4 +116,42 @@ func handleGET(args []string) string {
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 	}
 	return "$-1\r\n"
+}
+
+// 处理 KEYS 命令，添加规则匹配
+func handleKEYS(args []string) string {
+	if len(args) < 1 {
+		return "-ERR wrong number of arguments for 'keys' command\r\n"
+	}
+	pattern := args[0]
+
+	// 获取所有 keys
+	keys := storeKeys(pattern)
+
+	if len(keys) == 0 {
+		return "*0\r\n" // 没有匹配项
+	}
+
+	var result string
+	result += fmt.Sprintf("*%d\r\n", len(keys)) // 返回 key 数量
+	for _, key := range keys {
+		result += fmt.Sprintf("$%d\r\n%s\r\n", len(key), key)
+	}
+
+	return result
+}
+
+// 处理 SAVE 命令
+func handleSAVE(args []string) string {
+	if len(args) > 0 {
+		return "-ERR wrong number of arguments for 'save' command\r\n"
+	}
+
+	// 保存 RDB 文件
+	err := saveRDBFile(rdbConfig.dir, rdbConfig.dbfilename)
+	if err != nil {
+		return "-ERR " + err.Error() + "\r\n"
+	}
+
+	return "+OK\r\n"
 }

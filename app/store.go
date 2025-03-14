@@ -1,8 +1,10 @@
 package main
 
 import (
+	"path/filepath"
 	"sync"
 	"time"
+	// "honnef.co/go/tools/pattern"
 )
 
 // 内存存储 key-value 数据
@@ -18,8 +20,8 @@ var rdbConfig = struct {
 	dir        string
 	dbfilename string
 }{
-	dir:        "./data", // 默认存储路径
-	dbfilename: "dump.rdb",     // 默认 RDB 文件名
+	dir:        "./data",   // 默认存储路径
+	dbfilename: "dump.rdb", // 默认 RDB 文件名
 }
 
 // 设置 key-value，并处理过期时间
@@ -58,4 +60,19 @@ func storeDelete(key string) {
 	delete(store.data, key)
 	delete(store.expires, key)
 	store.Unlock()
+}
+
+// 返回所有的 key（处理 KEYS (pattern) 命令）
+func storeKeys(pattern string) []string {
+	store.RLock()
+	defer store.RUnlock()
+
+	var keys []string
+	for key := range store.data {
+		match, _ := filepath.Match(pattern, key)
+		if match {
+			keys = append(keys, key)
+		}
+	}
+	return keys
 }
