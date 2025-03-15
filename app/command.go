@@ -21,7 +21,10 @@ var commandHandlers = map[string]commandHandler{
 	"KEYS":   handleKEYS,   // 添加 KEYS 命令
 	"SAVE":   handleSAVE,   // 添加 SAVE 命令
 	"INFO":   handleInfo,   // 添加 INFO 命令
+	"REPLCONF": handleREPLCONF, // 添加 REPLCONF 命令
+	"PSYNC":     handlePSYNC, // 添加 PSYNC 命令处理
 }
+
 
 // 解析 RESP 协议
 func parseRESP(reader *bufio.Reader) (string, []string, error) {
@@ -161,8 +164,39 @@ func handleSAVE(args []string) string {
 func handleInfo(args []string) string {
 	if len(args) > 0 && strings.ToLower(args[0]) == "replication" {
 		// RESP Bulk String 响应格式
-		response := fmt.Sprintf("role:%s", getRole())
+		response := fmt.Sprintf(
+			"role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%d",
+			getRole(),
+			config.MasterReplID,
+			config.MasterReplOffset,
+		)
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(response), response)
 	}
 	return "-ERR invalid INFO section\r\n"
+}
+
+// 处理 REPLCONF 命令
+func handleREPLCONF(args []string) string {
+	if len(args) >= 2 {
+		if args[0] == "listening-port" {
+			// 对应 REPLCONF listening-port
+			return "+OK\r\n"
+		} else if args[0] == "capa" && args[1] == "psync2" {
+			// 对应 REPLCONF capa psync2
+			return "+OK\r\n"
+		} else {
+			return "-ERR unknown REPLCONF command\r\n"
+		}
+	} else {
+		return"-ERR invalid REPLCONF command\r\n"
+	}
+}
+
+// 处理 PSYNC 命令
+func handlePSYNC(args []string) string {
+	// 当收到 PSYNC ? -1 请求时，返回 FULLRESYNC <REPL_ID> 0
+	if len(args) == 2 && args[0] == "?" && args[1] == "-1" {
+		return fmt.Sprintf("+FULLRESYNC %s 0\r\n", config.MasterReplID)
+	}
+	return "-ERR invalid PSYNC command\r\n"
 }
