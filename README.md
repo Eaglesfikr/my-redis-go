@@ -34,6 +34,8 @@ Note: This section is for stages 2 and beyond.
 
 这是我自己以Go写的redis。这些天在学习redis和go，突发奇想，为什么不用Go做一个基本功能的redis呢，双管齐下，既可以学习Go语言，形成优雅编程习惯，也可以学习redis架构。
 
+
+
 # 环境
 
 > go 1.24.1
@@ -46,9 +48,17 @@ command.go 负责解析和执行命令
 store.go 负责数据存储
 ```
 
+
+
 # 特征
 
 实现部分如PING，SET,GET等命令，方法分发机制，实现其REST协议解析
+
+RDB数据快照实现数据持久化
+
+主从复制
+
+
 
 
 # 测试
@@ -63,6 +73,8 @@ redis-7.2.4  redis.tar.gz
 ***:/mnt/d/workshop/Go/src/my-redis-go/test$ cd redis-7.2.4/
 ***:/mnt/d/workshop/Go/src/my-redis-go/test/redis-7.2.4$ ./src/redis-cli
 ```
+
+
 
 # 参见
 
