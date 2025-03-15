@@ -74,29 +74,36 @@ func LoadRDB(dir, dbfilename string)  error {
 			if err != nil {
 				return err
 			}
-		}
+		
 		// 读取每个键值对
-		for i := 0; i < int(hashSize); i++ {
-			if partHeader[0] == 0xFD {
-				// 跳过过期时间 (4 字节)
-				var expiryTime uint32
-				err := binary.Read(file, binary.LittleEndian, &expiryTime)
+			for i := 0; i < int(hashSize); i++ {
+				// 读取每个键值对的部分
+				partHeader := make([]byte, 1)
+				_, err := file.Read(partHeader)
 				if err != nil {
-					fmt.Println("Reached EOF unexpectedly while reading expiry time.")
 					return err
 				}
 
-				// 读取值类型标志（1 字节），不使用
-				var valueType byte
-				err = binary.Read(file, binary.LittleEndian, &valueType)
-				if err != nil {
-					fmt.Println("Reached EOF unexpectedly while reading value type.")
-					return err
-				}
-				if(valueType!= 0x00){
-					fmt.Println("value type must be String.",valueType)
-				}
-				
+				if partHeader[0] == 0xFD {
+					// 跳过过期时间 (4 字节)
+					var expiryTime uint32
+					err := binary.Read(file, binary.LittleEndian, &expiryTime)
+					if err != nil {
+						fmt.Println("Reached EOF unexpectedly while reading expiry time.")
+						return err
+					}
+
+					// 读取值类型标志（1 字节），不使用
+					var valueType byte
+					err = binary.Read(file, binary.LittleEndian, &valueType)
+					if err != nil {
+						fmt.Println("Reached EOF unexpectedly while reading value type.")
+						return err
+					}
+					if(valueType!= 0x00){
+						fmt.Println("value type must be String.",valueType)
+					}
+					
 					// 读取key
 					key, err := readString(file)
 					if err != nil {
@@ -111,7 +118,8 @@ func LoadRDB(dir, dbfilename string)  error {
 					// 将键值对和过期时间存储到内存中
 					// storeSet(key, value, int64(expiryTime)*1000) // 先不管过期时间，先存储键值对
 					storeSet(key, value, 0)
-					
+						
+				}
 			}
 		}
 		if partHeader[0] == 0xFF {
