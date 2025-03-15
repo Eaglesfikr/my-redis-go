@@ -20,6 +20,7 @@ var commandHandlers = map[string]commandHandler{
 	"CONFIG": handleCONFIG, // CONFIG GET 命令先以CONFIG处理
 	"KEYS":   handleKEYS,   // 添加 KEYS 命令
 	"SAVE":   handleSAVE,   // 添加 SAVE 命令
+	"INFO":   handleInfo,   // 添加 INFO 命令
 }
 
 // 解析 RESP 协议
@@ -148,10 +149,20 @@ func handleSAVE(args []string) string {
 	}
 
 	// 保存 RDB 文件
-	err := SaveRDB(rdbConfig.dir,rdbConfig.dbfilename)
+	err := SaveRDB(rdbConfig.dir, rdbConfig.dbfilename)
 	if err != nil {
 		return "-ERR " + err.Error() + "\r\n"
 	}
 
 	return "+OK\r\n"
+}
+
+// 处理 INFO replication 命令
+func handleInfo(args []string) string {
+	if len(args) > 0 && strings.ToLower(args[0]) == "replication" {
+		// RESP Bulk String 响应格式
+		response := fmt.Sprintf("role:%s", getRole())
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(response), response)
+	}
+	return "-ERR invalid INFO section\r\n"
 }

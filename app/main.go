@@ -2,28 +2,43 @@ package main
 
 import (
 	"bufio"
+	"flag" //解析 --port 参数
 	"fmt"
-	"net"
 	"log"
+	"net"
 )
+
+// 服务器配置
+type ServerConfig struct {
+	Port       int
+	ReplicaOf  string // 为空表示是 master，否则是 slave
+}
+
+var config ServerConfig
 
 // 启动 Redis 服务器
 func main() {
+	flag.IntVar(&config.Port, "p", 6379, "Port number for the Redis server")
+	flag.StringVar(&config.ReplicaOf, "replicaof", "", "Master host and port for replication")
+	flag.Parse()
+
 	// 每次重启 Redis 服务器时，都需要读取 RDB 文件
 	err := LoadRDB(rdbConfig.dir, rdbConfig.dbfilename)
 	if err != nil {
 		log.Fatalf("Error reading RDB file: %v", err)
 	}
-	
+
 	// 监听端口
-	ln, err := net.Listen("tcp", ":6379")
+	address := fmt.Sprintf(":%d", config.Port)
+	ln, err := net.Listen("tcp", address)
 	if err != nil {
-		fmt.Println("Failed to bind port 6379:", err)
+		fmt.Printf("Failed to bind port %d: %v\n", config.Port, err)
 		return
 	}
+
 	defer ln.Close()
-	
-	fmt.Println("Mini Redis running on port 6379...")
+
+	fmt.Println("Mini Redis running on port:", config.Port)
 
 	for {
 		conn, err := ln.Accept()
@@ -63,4 +78,12 @@ func handleClient(conn net.Conn) {
 		response := handler(args)
 		conn.Write([]byte(response))
 	}
+}
+
+// 获取服务器角色
+func getRole() string {
+	if config.ReplicaOf == "" {
+		return "master"
+	}
+	return "slave"
 }
