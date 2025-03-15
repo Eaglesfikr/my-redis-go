@@ -148,7 +148,7 @@ func handleSAVE(args []string) string {
 	}
 
 	// 保存 RDB 文件
-	err := saveRDBFile(rdbConfig.dir, rdbConfig.dbfilename)
+	err := SaveRDB(rdbConfig.dir,rdbConfig.dbfilename)
 	if err != nil {
 		return "-ERR " + err.Error() + "\r\n"
 	}

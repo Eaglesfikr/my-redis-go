@@ -1,4 +1,4 @@
-package main
+package test
 
 import (
 	"bufio"
@@ -67,9 +67,9 @@ func startServer(host string, port string) {
 	}
 }
 
-func main() {
-	// 设置服务器监听地址
-	host := "0.0.0.0"
-	port := "6379"
-	startServer(host, port)
-}
+// func main() {
+// 	// 设置服务器监听地址
+// 	host := "0.0.0.0"
+// 	port := "6379"
+// 	startServer(host, port)
+// }

@@ -14,15 +14,7 @@ var store = struct {
 	expires map[string]int64 // 过期时间（毫秒时间戳）
 }{data: make(map[string]string), expires: make(map[string]int64)}
 
-// RDB 相关配置
-var rdbConfig = struct {
-	sync.RWMutex
-	dir        string
-	dbfilename string
-}{
-	dir:        "./data",   // 默认存储路径
-	dbfilename: "dump.rdb", // 默认 RDB 文件名
-}
+
 
 // 设置 key-value，并处理过期时间
 func storeSet(key, value string, ttl int64) {
@@ -51,6 +43,7 @@ func storeGet(key string) (string, bool) {
 		}
 		return value, true
 	}
+	
 	return "", false
 }
 
