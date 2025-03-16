@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -13,18 +15,17 @@ type commandHandler func(args []string) string
 
 // 命令映射
 var commandHandlers = map[string]commandHandler{
-	"PING":   handlePING,
-	"SET":    handleSET,
-	"GET":    handleGET,
-	"ECHO":   handleECHO,
-	"CONFIG": handleCONFIG, // CONFIG GET 命令先以CONFIG处理
-	"KEYS":   handleKEYS,   // 添加 KEYS 命令
-	"SAVE":   handleSAVE,   // 添加 SAVE 命令
-	"INFO":   handleInfo,   // 添加 INFO 命令
+	"PING":     handlePING,
+	"SET":      handleSET,
+	"GET":      handleGET,
+	"ECHO":     handleECHO,
+	"CONFIG":   handleCONFIG,   // CONFIG GET 命令先以CONFIG处理
+	"KEYS":     handleKEYS,     // 添加 KEYS 命令
+	"SAVE":     handleSAVE,     // 添加 SAVE 命令
+	"INFO":     handleInfo,     // 添加 INFO 命令
 	"REPLCONF": handleREPLCONF, // 添加 REPLCONF 命令
-	"PSYNC":     handlePSYNC, // 添加 PSYNC 命令处理
+	"PSYNC":    handlePSYNC,    // 添加 PSYNC 命令处理
 }
-
 
 // 解析 RESP 协议
 func parseRESP(reader *bufio.Reader) (string, []string, error) {
@@ -84,6 +85,7 @@ func handleECHO(args []string) string {
 		return "-ERR wrong number of arguments for 'echo' command\r\n"
 	}
 	message := args[0]
+
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message)
 }
 
@@ -105,6 +107,11 @@ func handleSET(args []string) string {
 	}
 
 	storeSet(key, value, ttl)
+	// 记录到 replication backlog（只在 master 记录）
+	if getRole() == "master" {
+		propagateToSlaves(fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+			len(key), key, len(value), value))
+	}
 	return "+OK\r\n"
 }
 
@@ -188,7 +195,7 @@ func handleREPLCONF(args []string) string {
 			return "-ERR unknown REPLCONF command\r\n"
 		}
 	} else {
-		return"-ERR invalid REPLCONF command\r\n"
+		return "-ERR invalid REPLCONF command\r\n"
 	}
 }
 
@@ -196,7 +203,25 @@ func handleREPLCONF(args []string) string {
 func handlePSYNC(args []string) string {
 	// 当收到 PSYNC ? -1 请求时，返回 FULLRESYNC <REPL_ID> 0
 	if len(args) == 2 && args[0] == "?" && args[1] == "-1" {
-		return fmt.Sprintf("+FULLRESYNC %s 0\r\n", config.MasterReplID)
+		// 1. 发送 FULLRESYNC 响应
+		fullResyncResponse := fmt.Sprintf("+FULLRESYNC %s 0\r\n", config.MasterReplID)
+
+		// 2. 空 RDB 文件（Hex 格式）
+		emptyRDBHex := "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2"
+		emptyRDB, _ := hex.DecodeString(emptyRDBHex)
+		fmt.Println("emptyRDB is:", len(emptyRDB), string(emptyRDB))
+		// 3. 使用 bytes.Buffer 来处理二进制数据
+		var buffer bytes.Buffer
+
+		// 4. 向缓冲区写入 FULLRESYNC 响应和 RDB 文件响应
+		buffer.WriteString(fullResyncResponse)                    // 写入 FULLRESYNC 响应
+		buffer.WriteString(fmt.Sprintf("$%d\r\n", len(emptyRDB))) // 写入长度信息
+		buffer.Write(emptyRDB)                                    // 写入空的 RDB 数据
+
+		
+		// 返回完整响应
+		return buffer.String()
+
 	}
 	return "-ERR invalid PSYNC command\r\n"
 }

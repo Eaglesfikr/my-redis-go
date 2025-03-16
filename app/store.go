@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ var store = struct {
 func storeSet(key, value string, ttl int64) {
 	store.Lock()
 	store.data[key] = value
+	// fmt.Println("storeSet key:", key, "value:", value, "ttl:", ttl)
 	if ttl > 0 {
 		store.expires[key] = ttl
 	} else {
