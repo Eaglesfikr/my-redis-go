@@ -9,7 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
+	// "sync"
 )
 
 // 服务器配置
@@ -52,10 +52,8 @@ func main() {
 		fmt.Printf("Handshaked with master, REPL_ID: %s and empty RDB: %s\n", replID, emptyRDB)
 
 		// 在这里开始处理来自主服务器的命令
-		// 启动 goroutine 监听 master 的数据同步
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go handleMasterCommands(conn, &wg) // 在另一个 goroutine 中处理来自 master 的命令
+
+		go handleMasterCommands(conn) // 在另一个 goroutine 中处理来自 master 的命令
 
 		//*** 让 slave 监听客户端请求 ***
 		address := fmt.Sprintf(":%d", config.Port)
@@ -76,9 +74,6 @@ func main() {
 			}
 			go handleReadOnlyClient(conn) // 只允许读取命令，不允许写入命令
 		}
-
-		// 防止 `main` 退出
-		wg.Wait()
 
 	} else { // 代表是master
 		// 每次重启 Redis的master 服务器时，都需要读取 RDB 文件
@@ -345,8 +340,8 @@ func propagateToSlaves(command string) {
 }
 
 // Slave 解析 Master 发送的命令
-func handleMasterCommands(conn net.Conn, wg *sync.WaitGroup) {
-	defer wg.Done() // 确保 Goroutine 执行完时通知 WaitGroup
+func handleMasterCommands(conn net.Conn) {
+	// defer wg.Done() // 确保 Goroutine 执行完时通知 WaitGroup
 
 	reader := bufio.NewReader(conn)
 	for {
