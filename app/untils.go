@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"fmt"
+	"strings"
 )
 	
 func writeString(buf *bytes.Buffer, str string) {
@@ -77,4 +78,15 @@ func readString(file *os.File) (string, error) {
 	}
 
 	return string(key), nil
+}
+
+// 判断是否是写命令
+func isReadCommand(cmd string) bool {
+    ReadCommands := []string{"GET", "ECHO", "KEYS"}
+    for _, rcmd := range ReadCommands {
+        if strings.HasPrefix(strings.ToUpper(cmd), rcmd) {
+            return true
+        }
+    }
+    return false
 }

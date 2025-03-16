@@ -7,18 +7,17 @@ import (
 	"log"
 	"net"
 	"os"
-	"strings"
 	"strconv"
+	"strings"
 	"sync"
-	
 )
 
 // 服务器配置
 type ServerConfig struct {
-	Port             int
-	ReplicaOf        string // 为空表示是 master，否则是 slave
-	MasterReplID     string // 40字符伪随机ID，硬编码
-	MasterReplOffset int64  // 复制偏移量，初始为 0
+	Port               int
+	ReplicaOf          string     // 为空表示是 master，否则是 slave
+	MasterReplID       string     // 40字符伪随机ID，硬编码
+	MasterReplOffset   int64      // 复制偏移量，初始为 0
 	replicaConnections []net.Conn // 存储所有副本的连接
 }
 
@@ -40,9 +39,9 @@ func init() {
 func main() {
 	//init隐式调用
 	// 如果是slave，先与主服务器握手
-	if config.ReplicaOf != "" {	//代表是slave
-		masterHost, masterPort := parseReplicaOf(config.ReplicaOf) // 解析--replicaof参数，提取master的host和端口
-		conn,replID, emptyRDB, err :=handshakeWithMaster(masterHost, masterPort)                // 发起连接主服务器并获取最终的ID和RDB文件
+	if config.ReplicaOf != "" { //代表是slave
+		masterHost, masterPort := parseReplicaOf(config.ReplicaOf)                 // 解析--replicaof参数，提取master的host和端口
+		conn, replID, emptyRDB, err := handshakeWithMaster(masterHost, masterPort) // 发起连接主服务器并获取最终的ID和RDB文件
 		if err != nil {
 			log.Fatalf("Error handshaking with master: %v", err)
 		}
@@ -53,14 +52,35 @@ func main() {
 		fmt.Printf("Handshaked with master, REPL_ID: %s and empty RDB: %s\n", replID, emptyRDB)
 
 		// 在这里开始处理来自主服务器的命令
+		// 启动 goroutine 监听 master 的数据同步
 		var wg sync.WaitGroup
-		wg.Add(1) // 增加等待的 Goroutine 计数
-		go handleMasterCommands(conn,  &wg) // 在另一个 goroutine 中处理来自 master 的命令
+		wg.Add(1)
+		go handleMasterCommands(conn, &wg) // 在另一个 goroutine 中处理来自 master 的命令
 
-		// 阻止主线程退出
-        wg.Wait() // 等待 handleMasterCommands 运行，阻止主线程退出
+		//*** 让 slave 监听客户端请求 ***
+		address := fmt.Sprintf(":%d", config.Port)
+		ln, err := net.Listen("tcp", address)
+		if err != nil {
+			fmt.Printf("Failed to bind port %d: %v\n", config.Port, err)
+			return
+		}
+		defer ln.Close()
 
-	}else { // 代表是master
+		fmt.Printf("Slave Redis running on port %d...\n", config.Port)
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				fmt.Println("Connection error:", err)
+				continue
+			}
+			go handleReadOnlyClient(conn) // 只允许读取命令，不允许写入命令
+		}
+
+		// 防止 `main` 退出
+		wg.Wait()
+
+	} else { // 代表是master
 		// 每次重启 Redis的master 服务器时，都需要读取 RDB 文件
 		err := LoadRDB(rdbConfig.dir, rdbConfig.dbfilename)
 		if err != nil {
@@ -89,10 +109,10 @@ func main() {
 	}
 }
 
-// 处理客户端(包括slave节点)连接
+// master处理客户端(包括slave节点)连接
 func handleClient(conn net.Conn) {
 	defer conn.Close()
-	
+
 	// 读取客户端命令
 	reader := bufio.NewReader(conn)
 
@@ -112,7 +132,6 @@ func handleClient(conn net.Conn) {
 			config.replicaConnections = append(config.replicaConnections, conn)
 		}
 
-
 		fmt.Println("Received command:", cmd, args)
 
 		// 方法分发
@@ -125,6 +144,43 @@ func handleClient(conn net.Conn) {
 		response := handler(args)
 		conn.Write([]byte(response))
 	}
+}
+
+// slave处理来自客户端的读命令
+func handleReadOnlyClient(conn net.Conn) {
+	defer conn.Close()
+
+	// 读取客户端命令
+	reader := bufio.NewReader(conn)
+
+	for {
+		cmd, args, err := parseRESP(reader)
+		if err != nil {
+			fmt.Println("Error parsing command:", err)
+			return
+		}
+		if cmd == "" {
+			fmt.Println("Client disconnected.")
+			return
+		}
+
+		// 检查是否是只读命令
+		if !isReadCommand(cmd) {
+			conn.Write([]byte("-ERR unknown command or not allowed in read-only mode\r\n"))
+			continue
+		}
+
+		// 方法分发
+		handler, exists := commandHandlers[cmd]
+		if !exists {
+			conn.Write([]byte("-ERR unknown command\r\n"))
+			continue
+		}
+
+		response := handler(args)
+		conn.Write([]byte(response))
+	}
+
 }
 
 // 获取服务器角色
@@ -146,7 +202,7 @@ func parseReplicaOf(replicaOf string) (string, string) {
 }
 
 // slave连接主服务器并发送PING命令以及REPLCONF命令,返回主服务器的响应中的ID和空的RDB文件
-func handshakeWithMaster(masterHost string, masterPort string) (net.Conn,string, []byte, error) {
+func handshakeWithMaster(masterHost string, masterPort string) (net.Conn, string, []byte, error) {
 	// 建立与主服务器的连接
 	conn, err := net.Dial("tcp", masterHost+":"+masterPort)
 	if err != nil {
@@ -272,20 +328,20 @@ func handshakeWithMaster(masterHost string, masterPort string) (net.Conn,string,
 	}
 	// fmt.Printf("Received empty RDB file of length %d bytes and content: %s\n", rdbLength, emptyRDB)
 	// 返回 REPL_ID 和 RDB 文件内容
-	return conn,replID, emptyRDB, nil
+	return conn, replID, emptyRDB, nil
 }
 
 // 让 Master 发送命令给 Slave
 func propagateToSlaves(command string) {
-    for _, slave := range config.replicaConnections {
-        _, err := slave.Write([]byte(command))
+	for _, slave := range config.replicaConnections {
+		_, err := slave.Write([]byte(command))
 		// 打印发送
-		fmt.Printf("Sending command to %s: %s\n",slave.RemoteAddr().String(), command)
-	
-        if err != nil {
-            fmt.Println("Failed to propagate to slave:", err)
-        }
-    }
+		fmt.Printf("Sending command to %s: %s\n", slave.RemoteAddr().String(), command)
+
+		if err != nil {
+			fmt.Println("Failed to propagate to slave:", err)
+		}
+	}
 }
 
 // Slave 解析 Master 发送的命令
@@ -299,7 +355,7 @@ func handleMasterCommands(conn net.Conn, wg *sync.WaitGroup) {
 			fmt.Println("Error reading command from master:", err)
 			return
 		}
-		fmt.Println("Received command :", command, args, "from ",conn.RemoteAddr().String())
+		fmt.Println("Received command :", command, args, "from ", conn.RemoteAddr().String())
 		if handler, exists := commandHandlers[command]; exists {
 			response := handler(args)
 			// conn.Write([]byte(response)) // slave 不需要返回响应给 主服务器
