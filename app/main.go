@@ -9,15 +9,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	// "sync"
+	"sync"
 )
 
 // 服务器配置
 type ServerConfig struct {
+	sync.Mutex
 	Port               int
 	ReplicaOf          string     // 为空表示是 master，否则是 slave
 	MasterReplID       string     // 40字符伪随机ID，硬编码
-	MasterReplOffset   int64      // 复制偏移量，初始为 0
+	ReplOffset		   int64      // 副本已经处理的字节数,初始为 0
 	replicaConnections []net.Conn // 存储所有副本的连接
 }
 
@@ -32,7 +33,7 @@ func init() {
 
 	// 设置复制 ID 和偏移量（主节点）
 	config.MasterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-	config.MasterReplOffset = 0
+	config.ReplOffset = -120	// 平衡各个slave偏移量为0，因为这里的握手我时按照命令来做的
 }
 
 // 启动 Redis 服务器
@@ -42,6 +43,7 @@ func main() {
 	if config.ReplicaOf != "" { //代表是slave
 		masterHost, masterPort := parseReplicaOf(config.ReplicaOf)                 // 解析--replicaof参数，提取master的host和端口
 		conn, replID, emptyRDB, err := handshakeWithMaster(masterHost, masterPort) // 发起连接主服务器并获取最终的ID和RDB文件
+		
 		if err != nil {
 			log.Fatalf("Error handshaking with master: %v", err)
 		}
@@ -52,7 +54,6 @@ func main() {
 		fmt.Printf("Handshaked with master, REPL_ID: %s and empty RDB: %s\n", replID, emptyRDB)
 
 		// 在这里开始处理来自主服务器的命令
-
 		go handleMasterCommands(conn) // 在另一个 goroutine 中处理来自 master 的命令
 
 		//*** 让 slave 监听客户端请求 ***
@@ -123,8 +124,8 @@ func handleClient(conn net.Conn) {
 		}
 
 		if cmd == "PSYNC" {
-			//网络存入master的config.replicaConnections
-			config.replicaConnections = append(config.replicaConnections, conn)
+			//网络存入master的config.replicaConnections,要保证原子性，多个slave节点下,调用方法
+			config.AddReplicaConnection(conn)
 		}
 
 		fmt.Println("Received command:", cmd, args)
@@ -137,6 +138,12 @@ func handleClient(conn net.Conn) {
 		}
 
 		response := handler(args)
+
+		// 当 为REPLCONF ACK *时，是例外，需要返回响应给 主服务器
+		if cmd == "REPLCONF" && args[0] == "GETACK" &&args[1]=="*" {
+			fmt.Println("Received",response, "from slave of ",conn.RemoteAddr().String())
+		}
+		fmt.Println("Executing from Master:", cmd, args, "Response:", response)
 		conn.Write([]byte(response))
 	}
 }
@@ -196,7 +203,7 @@ func parseReplicaOf(replicaOf string) (string, string) {
 	return parts[0], parts[1]
 }
 
-// slave连接主服务器并发送PING命令以及REPLCONF命令,返回主服务器的响应中的ID和空的RDB文件
+// slave连接master握手过程,返回主服务器的响应中的ID和空的RDB文件
 func handshakeWithMaster(masterHost string, masterPort string) (net.Conn, string, []byte, error) {
 	// 建立与主服务器的连接
 	conn, err := net.Dial("tcp", masterHost+":"+masterPort)
@@ -353,9 +360,15 @@ func handleMasterCommands(conn net.Conn) {
 		fmt.Println("Received command :", command, args, "from ", conn.RemoteAddr().String())
 		if handler, exists := commandHandlers[command]; exists {
 			response := handler(args)
-			// conn.Write([]byte(response)) // slave 不需要返回响应给 主服务器
-
+			// conn.Write([]byte(response)) // slave 一般不需要返回响应给 主服务器
+			// 当 为REPLCONF GETACK *时，是例外，需要返回响应给 主服务器
+			if command == "REPLCONF" && args[0] == "GETACK" &&args[1]=="*" {
+				conn.Write([]byte(response))
+			}
 			fmt.Println("Executing from Master:", command, args, "Response:", response)
+		} else {
+			fmt.Println("Unknown command from master:", command)
 		}
 	}
+	// fmt.Println("Executing from Master:", command, args, "Response:", response)
 }

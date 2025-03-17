@@ -18,6 +18,7 @@ var commandHandlers = map[string]commandHandler{
 	"PING":     handlePING,
 	"SET":      handleSET,
 	"GET":      handleGET,
+	"TYPE":     handleType,
 	"ECHO":     handleECHO,
 	"CONFIG":   handleCONFIG,   // CONFIG GET 命令先以CONFIG处理
 	"KEYS":     handleKEYS,     // 添加 KEYS 命令
@@ -28,8 +29,37 @@ var commandHandlers = map[string]commandHandler{
 }
 
 // 解析 RESP 协议
+// func parseRESP(reader *bufio.Reader) (string, []string, error) {
+// 	line, err := reader.ReadString('\n')
+// 	if err != nil {
+// 		return "", nil, err
+// 	}
+// 	line = strings.TrimSpace(line)
+// 	if strings.HasPrefix(line, "*") {
+// 		count := 0
+// 		fmt.Sscanf(line, "*%d", &count)
+// 		var args []string
+// 		for i := 0; i < count; i++ {
+// 			reader.ReadString('\n') // 读取 $N
+// 			arg, _ := reader.ReadString('\n')
+// 			args = append(args, strings.TrimSpace(arg))
+// 		}
+// 		// **每次解析命令成功时，若为可以传输到slave的命令，增加 offset命令字节数**
+// 		ToslaveCommands := []string{"SET", "PING", "FLUSHALL"}
+//     	for _, scmd := range ToslaveCommands {
+// 			if strings.ToUpper(args[0]) == scmd {
+// 				config.IncrementOffset(int64(len(line)))
+// 			}
+// 		}	
+// 		return strings.ToUpper(args[0]), args[1:], nil
+// 	}
+// 	return "", nil, nil
+// }
+
+// 解析 RESP 协议
 func parseRESP(reader *bufio.Reader) (string, []string, error) {
 	line, err := reader.ReadString('\n')
+	fmt.Println("line 's length is",len(line),"and content is",line)
 	if err != nil {
 		return "", nil, err
 	}
@@ -39,11 +69,27 @@ func parseRESP(reader *bufio.Reader) (string, []string, error) {
 		count := 0
 		fmt.Sscanf(line, "*%d", &count)
 		var args []string
+		totalBytes := len(line) // `*N\r\n` 的长度
+
 		for i := 0; i < count; i++ {
-			reader.ReadString('\n') // 读取 $N
-			arg, _ := reader.ReadString('\n')
+			lenLine, _ := reader.ReadString('\n') // 读取 `$N\r\n`
+			fmt.Println("lenline 's length is",len(lenLine),"and content is",lenLine)
+			totalBytes += len(lenLine) // 计算 `$N\r\n` 长度
+
+			arg, _ := reader.ReadString('\n') // 读取参数值
 			args = append(args, strings.TrimSpace(arg))
+			fmt.Println("args 's length is",len(arg),"and content is",arg)
+			totalBytes += len(arg) // `VALUE\r\n`
 		}
+
+		// **增加 offset**
+		toSlaveCommands := []string{"SET", "REPLCONF"}
+		for _, scmd := range toSlaveCommands {
+			if strings.ToUpper(args[0]) == scmd {
+				config.IncrementOffset(int64(totalBytes))
+			}
+		}
+
 		return strings.ToUpper(args[0]), args[1:], nil
 	}
 	return "", nil, nil
@@ -107,7 +153,7 @@ func handleSET(args []string) string {
 	}
 
 	storeSet(key, value, ttl)
-	// 记录到 replication backlog（只在 master 记录）
+	// 发送给所有 slave 节点
 	if getRole() == "master" {
 		propagateToSlaves(fmt.Sprintf("*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
 			len(key), key, len(value), value))
@@ -127,6 +173,39 @@ func handleGET(args []string) string {
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 	}
 	return "$-1\r\n"
+}
+
+// 假设有一个全局的存储数据结构，可以模拟 Redis 存储
+var redisDatabase = map[string]interface{}{
+	"some_key": "foo", // 示例数据
+}
+
+// 处理 TYPE 命令的函数
+func handleType(args []string) string {
+	// 确保传入的参数正确
+	if len(args) != 1 {
+		return "-ERR wrong number of arguments for 'TYPE' command\r\n"
+	}
+
+	// 获取传入的键
+	key := args[0]
+
+	// 检查键是否存在于 redisDatabase 中
+	value, exists := redisDatabase[key]
+	if !exists {
+		// 键不存在时，返回 "none"
+		return "+none\r\nnone"
+	}
+
+	// 判断键的类型，假设我们只处理 "string" 和 "none" 类型
+	switch value.(type) {
+	case string:
+		// 键是 string 类型，返回 "string"
+		return "+string\r\nstring"
+	default:
+		// 目前只处理 "string" 类型，其他类型返回 "none"
+		return "+none\r\nnone"
+	}
 }
 
 // 处理 KEYS 命令，添加规则匹配
@@ -175,7 +254,7 @@ func handleInfo(args []string) string {
 			"role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%d",
 			getRole(),
 			config.MasterReplID,
-			config.MasterReplOffset,
+			config.ReplOffset,
 		)
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(response), response)
 	}
@@ -186,17 +265,23 @@ func handleInfo(args []string) string {
 func handleREPLCONF(args []string) string {
 	if len(args) >= 2 {
 		if args[0] == "listening-port" {
-			// 对应 REPLCONF listening-port
+			// 对应 REPLCONF listening-port（master接受）
 			return "+OK\r\n"
 		} else if args[0] == "capa" && args[1] == "psync2" {
-			// 对应 REPLCONF capa psync2
+			// 对应 REPLCONF capa psync2（master接受）
 			return "+OK\r\n"
+		} else if args[0] == "getack" && args[1] == "*" {
+			// 处理 REPLCONF GETACK *(slave接受后返回)
+			offsetStr := strconv.FormatInt(config.ReplOffset, 10)	//将 int64 转换为 10 进制字符串。
+			return fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(offsetStr), offsetStr)
+		}else if args[0] == "ACK" {
+			// 处理 REPLCONF ACK <REPL_ID> <OFFSET>（master接受后打印就行，不操作，后面在server里加上net信息）
+			return fmt.Sprintf("*3\r\n$3\r\nACK\r\n$2\r\nis\r\n$%d\r\n%s\r\n", len(args[1]), args[1])
 		} else {
-			return "-ERR unknown REPLCONF command\r\n"
+			return "-ERR unknown REPLCONF command 's args\r\n"
 		}
-	} else {
-		return "-ERR invalid REPLCONF command\r\n"
 	}
+	return "-ERR invalid REPLCONF command\r\n"
 }
 
 // 处理 PSYNC 命令
@@ -218,7 +303,6 @@ func handlePSYNC(args []string) string {
 		buffer.WriteString(fmt.Sprintf("$%d\r\n", len(emptyRDB))) // 写入长度信息
 		buffer.Write(emptyRDB)                                    // 写入空的 RDB 数据
 
-		
 		// 返回完整响应
 		return buffer.String()
 

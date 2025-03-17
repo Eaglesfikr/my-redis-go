@@ -7,6 +7,7 @@ import (
 	"os"
 	"fmt"
 	"strings"
+	"net"
 )
 	
 func writeString(buf *bytes.Buffer, str string) {
@@ -82,11 +83,26 @@ func readString(file *os.File) (string, error) {
 
 // 判断是否是写命令
 func isReadCommand(cmd string) bool {
-    ReadCommands := []string{"GET", "ECHO", "KEYS"}
+    ReadCommands := []string{"GET", "ECHO", "KEYS","REPLCONF"}
     for _, rcmd := range ReadCommands {
         if strings.HasPrefix(strings.ToUpper(cmd), rcmd) {
             return true
         }
     }
     return false
+}
+
+// 增加 offset ，保证原子性
+func (s *ServerConfig) IncrementOffset(n int64) {
+	s.Lock()
+	s.ReplOffset += n
+	s.Unlock()
+	// s.BroadcastToReplicas()
+}
+
+// 添加副本连接，保证原子性
+func (s *ServerConfig) AddReplicaConnection(conn net.Conn) {
+	s.Lock()
+	defer s.Unlock()
+	s.replicaConnections = append(s.replicaConnections, conn)
 }
