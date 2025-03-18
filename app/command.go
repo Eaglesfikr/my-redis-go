@@ -29,6 +29,7 @@ var commandHandlers = map[string]commandHandler{
 	"XADD":     handleXADD,     // 添加 XADD 命令处理
 	"XRANGE":   handleXRANGE,   // 添加 XRANGE 命令处理
 	"XREAD":	handleXREAD,		// 添加 XREAD 命令处理
+	"INCR":     handleINCR,     // 添加 INCR 命令处理
 }
 
 // 解析 RESP 协议
@@ -573,18 +574,13 @@ func notifyClients(streamKey string) {
 }
 
 
-
-
-
-
+// 这个是没实现 BLOACK 0之前的，那时候也没有var waitingClients 和 notifyClients 函数
 // func handleXREAD(args []string) string {
 //     if len(args) < 3 {
 //         return "-ERR syntax error\r\n"
 //     }
-
 //     var blockTime int
 //     blocking := false
-
 //     // 解析 BLOCK 参数
 //     if args[0] == "block" {
 //         if len(args) < 5 {
@@ -598,19 +594,16 @@ func notifyClients(streamKey string) {
 //         }
 //         args = args[2:] // 移除 BLOCK 参数，继续处理 STREAMS
 //     }
-
 //     // 确保 `streams` 关键字正确
 //     if args[0] != "streams" || len(args) < 3 || len(args)%2 != 1 {
 //         return "-ERR syntax error\r\n"
 //     }
-
 //     // 解析流及其起始 ID
 //     streams := make(map[string]string)
 //     store.RLock()
 //     for i := 1; i < len(args); i += 2 {
 //         streamKey := args[i]
 //         lastReadID := args[i+1]
-
 //         // 处理 `$` 作为 ID，获取当前流的最新 ID
 //         if lastReadID == "$" {
 //             if entries, exists := store.streams[streamKey]; exists && len(entries) > 0 {
@@ -622,26 +615,21 @@ func notifyClients(streamKey string) {
 //         streams[streamKey] = lastReadID
 //     }
 //     store.RUnlock()
-
 //     for {
 //         store.RLock()
 //         result := make([]string, 0)
-
 //         for streamKey, lastReadID := range streams {
 //             if !strings.Contains(lastReadID, "-") {
 //                 lastReadID += "-0" // 确保 ID 格式正确
 //             }
 //             lastTS, lastSeq := parseStreamID(lastReadID)
-
 //             entries, exists := store.streams[streamKey]
 //             if !exists {
 //                 continue
 //             }
-
 //             streamResult := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(streamKey), streamKey)}
 //             entryCount := 0
 //             entryData := make([]string, 0)
-
 //             for _, entry := range entries {
 //                 ts, seq := parseStreamID(entry.ID)
 //                 if ts > lastTS || (ts == lastTS && seq > lastSeq) {
@@ -656,22 +644,18 @@ func notifyClients(streamKey string) {
 //                     entryData = append(entryData, strings.Join(entryPart, ""))
 //                 }
 //             }
-
 //             if entryCount > 0 {
 //                 streamResult = append(streamResult, fmt.Sprintf("*%d\r\n%s", entryCount, strings.Join(entryData, "")))
 //                 result = append(result, strings.Join(streamResult, ""))
 //             }
 //         }
 //         store.RUnlock()
-
 //         if len(result) > 0 {
 //             return fmt.Sprintf("*%d\r\n%s", len(result), strings.Join(result, ""))
 //         }
-
 //         if !blocking {
 //             return "$-1\r\n"
 //         }
-
 //         // 阻塞等待
 //         waitChan := make(chan struct{}, 1)
 //         store.Lock()
@@ -680,7 +664,6 @@ func notifyClients(streamKey string) {
 //             waitChan <- struct{}{}
 //         }()
 //         store.Unlock()
-
 //         select {
 //         case <-waitChan:
 //             return "$-1\r\n"
@@ -689,4 +672,30 @@ func notifyClients(streamKey string) {
 // }
 
 
+// 处理 INCR 命令
+func handleINCR(args []string) string {
+    if len(args) != 1 {
+        return "-ERR wrong number of arguments for 'INCR' command\r\n"
+    }
 
+    key := args[0]
+
+    store.Lock()
+    defer store.Unlock()
+
+    value, exists := store.data[key]
+    if !exists {
+        store.data[key] = "1"
+        return ":1\r\n"  // Redis 整数响应格式
+    }
+
+    num, err := strconv.Atoi(value)
+    if err != nil {
+        return "-ERR value is not an integer or out of range\r\n"
+    }
+
+    num++
+    store.data[key] = strconv.Itoa(num)
+
+    return fmt.Sprintf(":%d\r\n", num)  // Redis 正确的整数返回格式
+}
