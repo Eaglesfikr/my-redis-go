@@ -26,6 +26,9 @@ var commandHandlers = map[string]commandHandler{
 	"INFO":     handleInfo,     // 添加 INFO 命令
 	"REPLCONF": handleREPLCONF, // 添加 REPLCONF 命令
 	"PSYNC":    handlePSYNC,    // 添加 PSYNC 命令处理
+	"XADD":     handleXADD,     // 添加 XADD 命令处理
+	"XRANGE":   handleXRANGE,   // 添加 XRANGE 命令处理
+	"XREAD":	handleXREAD,		// 添加 XREAD 命令处理
 }
 
 // 解析 RESP 协议
@@ -44,13 +47,7 @@ var commandHandlers = map[string]commandHandler{
 // 			arg, _ := reader.ReadString('\n')
 // 			args = append(args, strings.TrimSpace(arg))
 // 		}
-// 		// **每次解析命令成功时，若为可以传输到slave的命令，增加 offset命令字节数**
-// 		ToslaveCommands := []string{"SET", "PING", "FLUSHALL"}
-//     	for _, scmd := range ToslaveCommands {
-// 			if strings.ToUpper(args[0]) == scmd {
-// 				config.IncrementOffset(int64(len(line)))
-// 			}
-// 		}	
+// 		
 // 		return strings.ToUpper(args[0]), args[1:], nil
 // 	}
 // 	return "", nil, nil
@@ -59,41 +56,55 @@ var commandHandlers = map[string]commandHandler{
 // 解析 RESP 协议
 func parseRESP(reader *bufio.Reader) (string, []string, error) {
 	line, err := reader.ReadString('\n')
-	fmt.Println("line 's length is",len(line),"and content is",line)
 	if err != nil {
 		return "", nil, err
 	}
 	line = strings.TrimSpace(line)
+	if getRole() == "master" {
+		if strings.HasPrefix(line, "*") {
+			count := 0
+			fmt.Sscanf(line, "*%d", &count)
+			var args []string
+			totalBytes := len(line) // `*N\r\n` 的长度
 
-	if strings.HasPrefix(line, "*") {
-		count := 0
-		fmt.Sscanf(line, "*%d", &count)
-		var args []string
-		totalBytes := len(line) // `*N\r\n` 的长度
+			for i := 0; i < count; i++ {
+				lenLine, _ := reader.ReadString('\n') // 读取 `$N\r\n`
+				totalBytes += len(lenLine) // 计算 `$N\r\n` 长度
 
-		for i := 0; i < count; i++ {
-			lenLine, _ := reader.ReadString('\n') // 读取 `$N\r\n`
-			fmt.Println("lenline 's length is",len(lenLine),"and content is",lenLine)
-			totalBytes += len(lenLine) // 计算 `$N\r\n` 长度
-
-			arg, _ := reader.ReadString('\n') // 读取参数值
-			args = append(args, strings.TrimSpace(arg))
-			fmt.Println("args 's length is",len(arg),"and content is",arg)
-			totalBytes += len(arg) // `VALUE\r\n`
-		}
-
-		// **增加 offset**
-		toSlaveCommands := []string{"SET", "REPLCONF"}
-		for _, scmd := range toSlaveCommands {
-			if strings.ToUpper(args[0]) == scmd {
-				config.IncrementOffset(int64(totalBytes))
+				arg, _ := reader.ReadString('\n') // 读取参数值
+				args = append(args, strings.TrimSpace(arg))
+				totalBytes += len(arg) // `VALUE\r\n`
 			}
-		}
 
-		return strings.ToUpper(args[0]), args[1:], nil
-	}
-	return "", nil, nil
-}
+			// **增加 offset**
+			toSlaveCommands := []string{"SET", "REPLCONF"}
+			for _, scmd := range toSlaveCommands {
+				if strings.ToUpper(args[0]) == scmd {
+					config.IncrementOffset(int64(totalBytes))
+				}
+			}
+
+			return strings.ToUpper(args[0]), args[1:], nil
+		}
+		return "", nil, nil
+	}else{	//master不需要考虑offset
+		if strings.HasPrefix(line, "*") {
+			count := 0
+			fmt.Sscanf(line, "*%d", &count)
+			var args []string
+			for i := 0; i < count; i++ {
+				reader.ReadString('\n') // 读取 $N
+				arg, _ := reader.ReadString('\n')
+				args = append(args, strings.TrimSpace(arg))
+			}
+			
+			return strings.ToUpper(args[0]), args[1:], nil
+		}
+		return "", nil, nil
+	}		
+}	
+	
+
 
 // 处理 CONFIG 命令
 func handleCONFIG(args []string) string {
@@ -190,22 +201,22 @@ func handleType(args []string) string {
 	// 获取传入的键
 	key := args[0]
 
-	// 检查键是否存在于 redisDatabase 中
-	value, exists := redisDatabase[key]
-	if !exists {
-		// 键不存在时，返回 "none"
-		return "+none\r\nnone"
+	// 检查键是否存在于 store.data 或 store.streams 中
+	store.RLock() // 使用读锁
+	defer store.RUnlock()
+
+	// 检查键是否在 streams 中，表示是 stream 类型
+	if _, exists := store.streams[key]; exists {
+		return "+stream\r\nstream"
 	}
 
-	// 判断键的类型，假设我们只处理 "string" 和 "none" 类型
-	switch value.(type) {
-	case string:
-		// 键是 string 类型，返回 "string"
+	// 检查键是否在 data 中，表示是 string 类型
+	if _, exists := store.data[key]; exists {
 		return "+string\r\nstring"
-	default:
-		// 目前只处理 "string" 类型，其他类型返回 "none"
-		return "+none\r\nnone"
 	}
+
+	// 键不存在时，返回 "none"
+	return "+none\r\nnone"
 }
 
 // 处理 KEYS 命令，添加规则匹配
@@ -309,3 +320,177 @@ func handlePSYNC(args []string) string {
 	}
 	return "-ERR invalid PSYNC command\r\n"
 }
+
+// 解析 XADD 命令
+func handleXADD(args []string) string {
+	if len(args) < 3 || len(args)%2 == 1 {
+		return "-ERR wrong number of arguments for 'XADD' command"
+	}
+	
+	stream := args[0]
+	id := args[1]
+	fields := make(map[string]string)
+
+	for i := 2; i < len(args); i += 2 {
+		fields[args[i]] = args[i+1]
+	}
+
+	 // 假设 xadd 函数返回流的 ID
+	 result := xadd(stream, id, fields)
+
+	 // 返回批量字符串格式的 ID，格式为：$length\r\nID\r\n
+	 return "$" + strconv.Itoa(len(result)) + "\r\n" + result+"\r\n"
+}
+
+// 为命令XRANGE解析 stream ID
+func parseStreamID(id string) (int64, int64) {
+	parts := strings.Split(id, "-")
+	if len(parts) != 2 {
+		return 0, 0
+	}
+	timestamp, err1 := strconv.ParseInt(parts[0], 10, 64)
+	sequence, err2 := strconv.ParseInt(parts[1], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, 0
+	}
+	return timestamp, sequence
+}
+
+func handleXRANGE(args []string) string {
+	if len(args) < 1 {
+		return "-ERR wrong number of arguments for 'XRANGE' command\r\n"
+	}
+
+	streamKey := args[0]
+	startID := "0-0"
+	endID := "9223372036854775807-9223372036854775807" // 默认最大
+
+	if len(args) >= 2 {
+		startID = args[1]
+		if startID == "-" {
+			startID = "0-0"
+		} else if !strings.Contains(startID, "-") {
+			startID += "-0" // 补全 -0
+		}
+	}
+
+	if len(args) >= 3 {
+		endID = args[2]
+		if endID == "+" {
+			endID = "9223372036854775807-9223372036854775807" // 最大值
+		} else if !strings.Contains(endID, "-") {
+			endID += "-9223372036854775807" // 序列号设为最大
+		}
+	}
+
+	startTS, startSeq := parseStreamID(startID)
+	endTS, endSeq := parseStreamID(endID)
+
+	store.RLock()
+	defer store.RUnlock()
+
+	entries, exists := store.streams[streamKey]
+	if !exists {
+		return "*0\r\n" // 空列表
+	}
+
+	var result []string
+	var count int
+
+	for _, entry := range entries {
+		entryTS, entrySeq := parseStreamID(entry.ID)
+		if (entryTS > startTS || (entryTS == startTS && entrySeq >= startSeq)) &&
+			(entryTS < endTS || (entryTS == endTS && entrySeq <= endSeq)) {
+			count++
+			// ID
+			entryData := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)}
+
+			// Fields
+			fieldCount := len(entry.Fields) * 2
+			entryData = append(entryData, fmt.Sprintf("*%d\r\n", fieldCount))
+			for k, v := range entry.Fields {
+				entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(k), k))
+				entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
+			}
+
+			result = append(result, strings.Join(entryData, ""))
+		}
+	}
+
+	if count == 0 {
+		return "*0\r\n" // 空列表
+	}
+
+	return fmt.Sprintf("*%d\r\n%s", count, strings.Join(result, ""))
+}
+
+
+// 处理XREAD命令
+func handleXREAD(args []string) string {
+	if len(args) < 3 || args[0] != "streams" || len(args)%2 == 0 {
+		return "-ERR syntax error\n"
+	}
+
+	streamCount := (len(args) - 1) / 2
+	streams := make([]string, streamCount)
+	lastReadIDs := make([]string, streamCount)
+
+	for i := 0; i < streamCount; i++ {
+		streams[i] = args[1+i]
+		lastReadIDs[i] = args[1+streamCount+i]
+		if !strings.Contains(lastReadIDs[i], "-") {
+			lastReadIDs[i] += "-0" // 确保 ID 格式正确
+		}
+	}
+
+	store.RLock()
+	defer store.RUnlock()
+
+	var result []string
+	streamCountInResponse := 0
+
+	for i, streamKey := range streams {
+		lastTS, lastSeq := parseStreamID(lastReadIDs[i])
+		entries, exists := store.streams[streamKey]
+		if !exists {
+			continue
+		}
+
+		var streamResult []string
+		entryCount := 0
+
+		for _, entry := range entries {
+			ts, seq := parseStreamID(entry.ID)
+			if ts > lastTS || (ts == lastTS && seq > lastSeq) {
+				entryCount++
+
+				// ID
+				entryData := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)}
+
+				// Fields
+				fieldCount := len(entry.Fields) * 2
+				entryData = append(entryData, fmt.Sprintf("*%d\r\n", fieldCount))
+				for k, v := range entry.Fields {
+					entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(k), k))
+					entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
+				}
+
+				streamResult = append(streamResult, strings.Join(entryData, ""))
+			}
+		}
+
+		if entryCount > 0 {
+			streamCountInResponse++
+			result = append(result, fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n%s", len(streamKey), streamKey, entryCount, strings.Join(streamResult, "")))
+		}
+	}
+
+	if streamCountInResponse == 0 {
+		return "*0\r\n" // 没有新数据
+	}
+
+	return fmt.Sprintf("*%d\r\n%s", streamCountInResponse, strings.Join(result, ""))
+}
+
+
+
