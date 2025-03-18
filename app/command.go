@@ -462,11 +462,32 @@ func handleXREAD(args []string) string {
         return "-ERR syntax error\r\n"
     }
 
-    // 解析流及其起始 ID
+    // // 解析流及其起始 ID
+    // streams := make(map[string]string)
+    // for i := 1; i < len(args); i += 2 {
+    //     streams[args[i]] = args[i+1]
+    // }
+
+	//解析流及其起始 ID以支持$
     streams := make(map[string]string)
+    store.RLock()
     for i := 1; i < len(args); i += 2 {
-        streams[args[i]] = args[i+1]
+        streamKey := args[i]
+        lastReadID := args[i+1]
+
+        // 处理 `$` 作为 ID，获取当前流的最新 ID
+        if lastReadID == "$" {
+            if entries, exists := store.streams[streamKey]; exists && len(entries) > 0 {
+                lastReadID = entries[len(entries)-1].ID
+            } else {
+                lastReadID = "0-0" // 若流为空，则等待新条目
+            }
+        }
+        streams[streamKey] = lastReadID
     }
+    store.RUnlock()
+
+
 
     for {
         store.RLock()
