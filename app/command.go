@@ -338,6 +338,9 @@ func handleXADD(args []string) string {
 	 // 假设 xadd 函数返回流的 ID
 	 result := xadd(stream, id, fields)
 
+	// 通知所有等待 `XREAD` 的客户端
+	notifyClients(stream) 
+
 	 // 返回批量字符串格式的 ID，格式为：$length\r\nID\r\n
 	 return "$" + strconv.Itoa(len(result)) + "\r\n" + result+"\r\n"
 }
@@ -426,71 +429,243 @@ func handleXRANGE(args []string) string {
 
 
 // 处理XREAD命令
+var waitingClients = make(map[string][]chan struct{})
+
 func handleXREAD(args []string) string {
-	if len(args) < 3 || args[0] != "streams" || len(args)%2 == 0 {
-		return "-ERR syntax error\n"
-	}
+    if len(args) < 3 {
+        return "-ERR syntax error\r\n"
+    }
 
-	streamCount := (len(args) - 1) / 2
-	streams := make([]string, streamCount)
-	lastReadIDs := make([]string, streamCount)
+    var blockTime int
+    blocking := false
+    infiniteBlock := false
 
-	for i := 0; i < streamCount; i++ {
-		streams[i] = args[1+i]
-		lastReadIDs[i] = args[1+streamCount+i]
-		if !strings.Contains(lastReadIDs[i], "-") {
-			lastReadIDs[i] += "-0" // 确保 ID 格式正确
-		}
-	}
+    // 解析 BLOCK 参数
+    if args[0] == "block" {
+        if len(args) < 5 {
+            return "-ERR syntax error\r\n"
+        }
+        blocking = true
+        var err error
+        blockTime, err = strconv.Atoi(args[1])
+        if err != nil || blockTime < 0 {
+            return "-ERR invalid block time\r\n"
+        }
+        if blockTime == 0 {
+            infiniteBlock = true
+        }
+        args = args[2:] // 移除 BLOCK 参数
+    }
 
-	store.RLock()
-	defer store.RUnlock()
+    // 确保 `streams` 关键字正确
+    if args[0] != "streams" || len(args) < 3 || len(args)%2 != 1 {
+        return "-ERR syntax error\r\n"
+    }
 
-	var result []string
-	streamCountInResponse := 0
+    // 解析流及其起始 ID
+    streams := make(map[string]string)
+    for i := 1; i < len(args); i += 2 {
+        streams[args[i]] = args[i+1]
+    }
 
-	for i, streamKey := range streams {
-		lastTS, lastSeq := parseStreamID(lastReadIDs[i])
-		entries, exists := store.streams[streamKey]
-		if !exists {
-			continue
-		}
+    for {
+        store.RLock()
+        result := make([]string, 0)
 
-		var streamResult []string
-		entryCount := 0
+        for streamKey, lastReadID := range streams {
+            if !strings.Contains(lastReadID, "-") {
+                lastReadID += "-0" // 确保 ID 格式正确
+            }
+            lastTS, lastSeq := parseStreamID(lastReadID)
 
-		for _, entry := range entries {
-			ts, seq := parseStreamID(entry.ID)
-			if ts > lastTS || (ts == lastTS && seq > lastSeq) {
-				entryCount++
+            entries, exists := store.streams[streamKey]
+            if !exists {
+                continue
+            }
 
-				// ID
-				entryData := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)}
+            streamResult := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(streamKey), streamKey)}
+            entryCount := 0
+            entryData := make([]string, 0)
 
-				// Fields
-				fieldCount := len(entry.Fields) * 2
-				entryData = append(entryData, fmt.Sprintf("*%d\r\n", fieldCount))
-				for k, v := range entry.Fields {
-					entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(k), k))
-					entryData = append(entryData, fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
-				}
+            for _, entry := range entries {
+                ts, seq := parseStreamID(entry.ID)
+                if ts > lastTS || (ts == lastTS && seq > lastSeq) {
+                    entryCount++
+                    entryPart := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)}
+                    fieldCount := len(entry.Fields) * 2
+                    entryPart = append(entryPart, fmt.Sprintf("*%d\r\n", fieldCount))
+                    for k, v := range entry.Fields {
+                        entryPart = append(entryPart, fmt.Sprintf("$%d\r\n%s\r\n", len(k), k))
+                        entryPart = append(entryPart, fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
+                    }
+                    entryData = append(entryData, strings.Join(entryPart, ""))
+                }
+            }
 
-				streamResult = append(streamResult, strings.Join(entryData, ""))
-			}
-		}
+            if entryCount > 0 {
+                streamResult = append(streamResult, fmt.Sprintf("*%d\r\n%s", entryCount, strings.Join(entryData, "")))
+                result = append(result, strings.Join(streamResult, ""))
+            }
+        }
+        store.RUnlock()
 
-		if entryCount > 0 {
-			streamCountInResponse++
-			result = append(result, fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n%s", len(streamKey), streamKey, entryCount, strings.Join(streamResult, "")))
-		}
-	}
+        if len(result) > 0 {
+            return fmt.Sprintf("*%d\r\n%s", len(result), strings.Join(result, ""))
+        }
 
-	if streamCountInResponse == 0 {
-		return "*0\r\n" // 没有新数据
-	}
+        if !blocking {
+            return "$-1\r\n"
+        }
 
-	return fmt.Sprintf("*%d\r\n%s", streamCountInResponse, strings.Join(result, ""))
+        // 使用 channel 等待新数据
+        waitChan := make(chan struct{})
+        store.Lock()
+        for streamKey := range streams {
+            waitingClients[streamKey] = append(waitingClients[streamKey], waitChan)
+        }
+        store.Unlock()
+
+        if infiniteBlock {
+            <-waitChan // 无限阻塞，直到新数据到来
+        } else {
+            select {
+            case <-waitChan:
+                // 有数据更新
+            case <-time.After(time.Duration(blockTime) * time.Millisecond):
+                // 超时返回 NULL
+                return "$-1\r\n"
+            }
+        }
+    }
 }
+
+// XADD 时通知等待的 XREAD,以支持XREADBLOCK 0参数取消阻塞
+func notifyClients(streamKey string) {
+    store.Lock()
+    if clients, ok := waitingClients[streamKey]; ok {
+        for _, ch := range clients {
+            close(ch) // 通知所有等待的 XREAD
+        }
+        delete(waitingClients, streamKey) // 清除已通知的 channel
+    }
+    store.Unlock()
+}
+
+
+
+
+
+
+// func handleXREAD(args []string) string {
+//     if len(args) < 3 {
+//         return "-ERR syntax error\r\n"
+//     }
+
+//     var blockTime int
+//     blocking := false
+
+//     // 解析 BLOCK 参数
+//     if args[0] == "block" {
+//         if len(args) < 5 {
+//             return "-ERR syntax error\r\n"
+//         }
+//         blocking = true
+//         var err error
+//         blockTime, err = strconv.Atoi(args[1])
+//         if err != nil || blockTime < 0 {
+//             return "-ERR invalid block time\r\n"
+//         }
+//         args = args[2:] // 移除 BLOCK 参数，继续处理 STREAMS
+//     }
+
+//     // 确保 `streams` 关键字正确
+//     if args[0] != "streams" || len(args) < 3 || len(args)%2 != 1 {
+//         return "-ERR syntax error\r\n"
+//     }
+
+//     // 解析流及其起始 ID
+//     streams := make(map[string]string)
+//     store.RLock()
+//     for i := 1; i < len(args); i += 2 {
+//         streamKey := args[i]
+//         lastReadID := args[i+1]
+
+//         // 处理 `$` 作为 ID，获取当前流的最新 ID
+//         if lastReadID == "$" {
+//             if entries, exists := store.streams[streamKey]; exists && len(entries) > 0 {
+//                 lastReadID = entries[len(entries)-1].ID
+//             } else {
+//                 lastReadID = "0-0" // 若流为空，则等待新条目
+//             }
+//         }
+//         streams[streamKey] = lastReadID
+//     }
+//     store.RUnlock()
+
+//     for {
+//         store.RLock()
+//         result := make([]string, 0)
+
+//         for streamKey, lastReadID := range streams {
+//             if !strings.Contains(lastReadID, "-") {
+//                 lastReadID += "-0" // 确保 ID 格式正确
+//             }
+//             lastTS, lastSeq := parseStreamID(lastReadID)
+
+//             entries, exists := store.streams[streamKey]
+//             if !exists {
+//                 continue
+//             }
+
+//             streamResult := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(streamKey), streamKey)}
+//             entryCount := 0
+//             entryData := make([]string, 0)
+
+//             for _, entry := range entries {
+//                 ts, seq := parseStreamID(entry.ID)
+//                 if ts > lastTS || (ts == lastTS && seq > lastSeq) {
+//                     entryCount++
+//                     entryPart := []string{fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)}
+//                     fieldCount := len(entry.Fields) * 2
+//                     entryPart = append(entryPart, fmt.Sprintf("*%d\r\n", fieldCount))
+//                     for k, v := range entry.Fields {
+//                         entryPart = append(entryPart, fmt.Sprintf("$%d\r\n%s\r\n", len(k), k))
+//                         entryPart = append(entryPart, fmt.Sprintf("$%d\r\n%s\r\n", len(v), v))
+//                     }
+//                     entryData = append(entryData, strings.Join(entryPart, ""))
+//                 }
+//             }
+
+//             if entryCount > 0 {
+//                 streamResult = append(streamResult, fmt.Sprintf("*%d\r\n%s", entryCount, strings.Join(entryData, "")))
+//                 result = append(result, strings.Join(streamResult, ""))
+//             }
+//         }
+//         store.RUnlock()
+
+//         if len(result) > 0 {
+//             return fmt.Sprintf("*%d\r\n%s", len(result), strings.Join(result, ""))
+//         }
+
+//         if !blocking {
+//             return "$-1\r\n"
+//         }
+
+//         // 阻塞等待
+//         waitChan := make(chan struct{}, 1)
+//         store.Lock()
+//         go func() {
+//             time.Sleep(time.Duration(blockTime) * time.Millisecond)
+//             waitChan <- struct{}{}
+//         }()
+//         store.Unlock()
+
+//         select {
+//         case <-waitChan:
+//             return "$-1\r\n"
+//         }
+//     }
+// }
 
 
 
