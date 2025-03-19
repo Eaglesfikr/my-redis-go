@@ -23,10 +23,6 @@ type ServerConfig struct {
 }
 
 var config ServerConfig
-// 命令处理函数类型
-type commandHandler func(args []string) string
-// 命令映射（先声明，不初始化）
-var commandHandlers map[string]commandHandler
 
 // init 函数用于初始化配置，程序执行前隐式自动调用
 func init() {
@@ -38,26 +34,6 @@ func init() {
 	// 设置复制 ID 和偏移量（主节点）
 	config.MasterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 	config.ReplOffset = -120	// 平衡各个slave偏移量为0，因为这里的握手我时按照命令来做的
-
-	commandHandlers = map[string]commandHandler{
-		"PING":     handlePING,
-		"SET":      handleSET,
-		"GET":      handleGET,
-		"TYPE":     handleType,
-		"ECHO":     handleECHO,
-		"CONFIG":   handleCONFIG,   // CONFIG GET 命令先以CONFIG处理
-		"KEYS":     handleKEYS,     // 添加 KEYS 命令
-		"SAVE":     handleSAVE,     // 添加 SAVE 命令
-		"INFO":     handleInfo,     // 添加 INFO 命令
-		"REPLCONF": handleREPLCONF, // 添加 REPLCONF 命令
-		"PSYNC":    handlePSYNC,    // 添加 PSYNC 命令处理
-		"XADD":     handleXADD,     // 添加 XADD 命令处理
-		"XRANGE":   handleXRANGE,   // 添加 XRANGE 命令处理
-		"XREAD":	handleXREAD,		// 添加 XREAD 命令处理
-		"INCR":     handleINCR,     // 添加 INCR 命令处理
-		"MULTI":    handleMULTI,    // 添加 MULTI 命令处理
-		"EXEC":     handleEXEC,     // 添加 EXEC 命令处理
-	}
 }
 
 // 启动 Redis 服务器

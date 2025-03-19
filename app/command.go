@@ -8,11 +8,29 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	// "sync"
 )
 
-// 用于同步多线程访问,事务中已经
-// var mu sync.Mutex
+// 命令处理函数类型
+type commandHandler func(args []string) string
+
+// 命令映射
+var commandHandlers = map[string]commandHandler{
+	"PING":     handlePING,
+	"SET":      handleSET,
+	"GET":      handleGET,
+	"TYPE":     handleType,
+	"ECHO":     handleECHO,
+	"CONFIG":   handleCONFIG,   // CONFIG GET 命令先以CONFIG处理
+	"KEYS":     handleKEYS,     // 添加 KEYS 命令
+	"SAVE":     handleSAVE,     // 添加 SAVE 命令
+	"INFO":     handleInfo,     // 添加 INFO 命令
+	"REPLCONF": handleREPLCONF, // 添加 REPLCONF 命令
+	"PSYNC":    handlePSYNC,    // 添加 PSYNC 命令处理
+	"XADD":     handleXADD,     // 添加 XADD 命令处理
+	"XRANGE":   handleXRANGE,   // 添加 XRANGE 命令处理
+	"XREAD":	handleXREAD,		// 添加 XREAD 命令处理
+	"INCR":     handleINCR,     // 添加 INCR 命令处理
+}
 
 // 解析 RESP 协议
 // func parseRESP(reader *bufio.Reader) (string, []string, error) {
@@ -145,7 +163,7 @@ func handleSET(args []string) string {
 			return "-ERR PX argument must be an integer\r\n"
 		}
 	}
-	
+
 	storeSet(key, value, ttl)
 	// 发送给所有 slave 节点
 	if getRole() == "master" {
@@ -680,62 +698,4 @@ func handleINCR(args []string) string {
     store.data[key] = strconv.Itoa(num)
 
     return fmt.Sprintf(":%d\r\n", num)  // Redis 正确的整数返回格式
-}
-
-// 处理 MULTI：开启事务模式
-func handleMULTI(args []string) string {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if isInTransaction {
-		return "-ERR MULTI already started\r\n"
-	}
-
-	// 开启事务
-	isInTransaction = true
-	transactionQueue = [][]string{} // 清空事务队列
-	return "+OK\r\n"
-}
-
-// 执行 EXEC 事务
-func handleEXEC(args []string) string {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if !isInTransaction {
-		return "-ERR EXEC without MULTI\r\n"
-	}
-
-	// 执行所有缓存的命令
-	responses := []string{}
-	for _, cmdArgs := range transactionQueue {
-		cmd := cmdArgs[0]       // 命令名称
-		args := cmdArgs[1:]     // 参数
-		responses = append(responses, executeCommand(cmd, args))
-	}
-
-	// 清空事务状态
-	isInTransaction = false
-	transactionQueue = [][]string{} // 避免 nil 指针问题
-
-	return fmt.Sprintf("*%d\r\n%s", len(responses), strings.Join(responses, ""))
-}
-
-// 处理普通命令（在事务模式下仅排队，不执行）
-func executeCommand(cmd string, args []string) string {
-	mu.Lock()
-	defer mu.Unlock()
-
-	if isInTransaction {
-		// 事务模式下，不执行命令，而是加入事务队列
-		transactionQueue = append(transactionQueue, append([]string{cmd}, args...))
-		return "+QUEUED\r\n"
-	}
-
-	// 直接执行命令
-	handler, exists := commandHandlers[cmd]
-	if !exists {
-		return "-ERR unknown command\r\n"
-	}
-	return handler(args)
 }
