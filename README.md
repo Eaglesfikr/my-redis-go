@@ -19,9 +19,11 @@
 # 项目结构
 
 ```
-main.go 负责网络通信
-command.go 负责解析和执行命令
-store.go 负责数据存储
+main.go 		负责网络通信，各节点和客户端的连接
+command.go 		负责解析和执行命令
+store.go 		负责数据存储
+trancation.go	负责事务处理
+untils.go		工具方法
 ```
 
 
