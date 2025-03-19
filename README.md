@@ -32,26 +32,28 @@ store.go 负责数据存储
 
 实现部分如PING，SET,GET等命令，方法分发机制，实现其REST协议解析
 
-RDB数据快照实现数据持久化
+RDB数据快照实现数据持久化，支持RDB文件格式
 
-主从复制
+主从复制，多个副本命令传播
+
+支持流类型数据结构，阻塞读取
+
+事务交易，多个并发支持
 
 
 
 
 
 
-# 测试
+# 测试方法
 
-成功安装redis-cli在WSL里并编译：
+安装redis-cli在linux(或者WSL)里并编译：
 
 ```
-PS D:\workshop\Go\src\my-redis-go> cd test
-PS D:\workshop\Go\src\my-redis-go\test> wsl
-***:/mnt/d/workshop/Go/src/my-redis-go/test$ ls
-redis-7.2.4  redis.tar.gz
-***:/mnt/d/workshop/Go/src/my-redis-go/test$ cd redis-7.2.4/
-***:/mnt/d/workshop/Go/src/my-redis-go/test/redis-7.2.4$ ./src/redis-cli
+$git clone https://github.com/redis/redis.git
+$cd redis
+$make
+$ ./src/redis-cli
 ```
 
 

@@ -16,14 +16,12 @@ import (
 type ServerConfig struct {
 	sync.Mutex
 	Port               int
-	ReplicaOf          string     // 为空表示是 master，否则是 slave
-	MasterReplID       string     // 40字符伪随机ID，硬编码
-	ReplOffset         int64      // 副本已经处理的字节数,初始为 0
-	replicaConnections []net.Conn // 存储所有副本的连接
-	// 事务队列
-	transactionQueue []string
-	// 当前是否处于事务模式
-	inTransaction bool
+	ReplicaOf          string     
+	MasterReplID       string     
+	ReplOffset         int64      
+	replicaConnections []net.Conn 
+	transactionQueue []string	  
+	inTransaction bool			  
 }
 
 var config ServerConfig

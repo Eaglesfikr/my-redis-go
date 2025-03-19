@@ -17,8 +17,8 @@ var rdbConfig = struct {
 	dir        string
 	dbfilename string
 }{
-	dir:        "./data",   // 默认存储路径
-	dbfilename: "dump.rdb", // 默认 RDB 文件名
+	dir:        "./data",   
+	dbfilename: "dump.rdb", 
 }
 
 // 读取 RDB 文件：只读出database部分就行
