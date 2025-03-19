@@ -24,6 +24,7 @@ command.go 		负责解析和执行命令
 store.go 		负责数据存储
 trancation.go	负责事务处理
 untils.go		工具方法
+RDB.go			RDB数据持久化处理
 ```
 
 
