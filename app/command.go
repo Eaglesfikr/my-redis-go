@@ -30,6 +30,8 @@ var commandHandlers = map[string]commandHandler{
 	"XRANGE":   handleXRANGE,   // 添加 XRANGE 命令处理
 	"XREAD":	handleXREAD,		// 添加 XREAD 命令处理
 	"INCR":     handleINCR,     // 添加 INCR 命令处理
+	// "MULTI":	handleMULTI,		// 添加 MULTI 命令处理
+	// "EXEC":		handleEXEC,		// 添加 EXEC 命令处理
 }
 
 // 解析 RESP 协议
@@ -699,3 +701,14 @@ func handleINCR(args []string) string {
 
     return fmt.Sprintf(":%d\r\n", num)  // Redis 正确的整数返回格式
 }
+
+
+// 处理 MULTI 命令
+// func handleMULTI(args []string) string {
+// 	config.inTransaction = true
+// 	// 清空之前的事务队列，以防不小心留下旧的命令
+// 	config.transactionQueue = []string{}
+// 	return "+OK\r\n"
+// }
+
+

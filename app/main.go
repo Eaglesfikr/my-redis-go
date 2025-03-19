@@ -18,8 +18,12 @@ type ServerConfig struct {
 	Port               int
 	ReplicaOf          string     // 为空表示是 master，否则是 slave
 	MasterReplID       string     // 40字符伪随机ID，硬编码
-	ReplOffset		   int64      // 副本已经处理的字节数,初始为 0
+	ReplOffset         int64      // 副本已经处理的字节数,初始为 0
 	replicaConnections []net.Conn // 存储所有副本的连接
+	// 事务队列
+	transactionQueue []string
+	// 当前是否处于事务模式
+	inTransaction bool
 }
 
 var config ServerConfig
@@ -33,7 +37,7 @@ func init() {
 
 	// 设置复制 ID 和偏移量（主节点）
 	config.MasterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
-	config.ReplOffset = -120	// 平衡各个slave偏移量为0，因为这里的握手我时按照命令来做的
+	config.ReplOffset = -120 // 平衡各个slave偏移量为0，因为这里的握手我时按照命令来做的
 }
 
 // 启动 Redis 服务器
@@ -43,7 +47,7 @@ func main() {
 	if config.ReplicaOf != "" { //代表是slave
 		masterHost, masterPort := parseReplicaOf(config.ReplicaOf)                 // 解析--replicaof参数，提取master的host和端口
 		conn, replID, emptyRDB, err := handshakeWithMaster(masterHost, masterPort) // 发起连接主服务器并获取最终的ID和RDB文件
-		
+
 		if err != nil {
 			log.Fatalf("Error handshaking with master: %v", err)
 		}
@@ -130,20 +134,38 @@ func handleClient(conn net.Conn) {
 
 		fmt.Println("Received command:", cmd, args)
 
-		// 方法分发
+		// 处理 MULTI 命令
+		if cmd == "MULTI" {
+			fmt.Println("Received MULTI command, entering transaction mode")
+			config.StartTransaction(conn)
+			continue
+		}
+
+		// 处理 EXEC 命令
+		if cmd == "EXEC" {
+			config.ExecuteTransaction(conn)
+			continue
+		}
+
+		// 在事务模式下，将命令排队
+		if config.inTransaction {
+			config.QueueTransactionCommand(cmd, args, conn)
+			continue
+		}
+
+		// 非事务模式下，直接处理命令方法分发
 		handler, exists := commandHandlers[cmd]
 		if !exists {
 			conn.Write([]byte("-ERR unknown command\r\n"))
 			continue
 		}
-
 		response := handler(args)
 
 		// 当 为REPLCONF ACK *时，是例外，需要返回响应给 主服务器
-		if cmd == "REPLCONF" && args[0] == "GETACK" &&args[1]=="*" {
-			fmt.Println("Received",response, "from slave of ",conn.RemoteAddr().String())
+		if cmd == "REPLCONF" && args[0] == "GETACK" && args[1] == "*" {
+			fmt.Println("Received", response, "from slave of ", conn.RemoteAddr().String())
 		}
-		fmt.Println("Executing from Master:", cmd, args, "Response:", response)
+		fmt.Println("Executing :", cmd, args, "Response:", response)
 		conn.Write([]byte(response))
 	}
 }
@@ -172,7 +194,26 @@ func handleReadOnlyClient(conn net.Conn) {
 			continue
 		}
 
-		// 方法分发
+		// 处理 MULTI 命令
+		if cmd == "MULTI" {
+			fmt.Println("Received MULTI command, entering transaction mode")
+			config.StartTransaction(conn)
+			continue
+		}
+
+		// 处理 EXEC 命令
+		if cmd == "EXEC" {
+			config.ExecuteTransaction(conn)
+			continue
+		}
+
+		// 在事务模式下，将命令排队
+		if config.inTransaction {
+			config.QueueTransactionCommand(cmd, args, conn)
+			continue
+		}
+
+		// 非事务模式下，直接处理命令方法分发
 		handler, exists := commandHandlers[cmd]
 		if !exists {
 			conn.Write([]byte("-ERR unknown command\r\n"))
@@ -362,7 +403,7 @@ func handleMasterCommands(conn net.Conn) {
 			response := handler(args)
 			// conn.Write([]byte(response)) // slave 一般不需要返回响应给 主服务器
 			// 当 为REPLCONF GETACK *时，是例外，需要返回响应给 主服务器
-			if command == "REPLCONF" && args[0] == "GETACK" &&args[1]=="*" {
+			if command == "REPLCONF" && args[0] == "GETACK" && args[1] == "*" {
 				conn.Write([]byte(response))
 			}
 			fmt.Println("Executing from Master:", command, args, "Response:", response)
